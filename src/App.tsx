@@ -3,7 +3,47 @@
 // Dynamic TDEE + Goal-based System
 // ============================================
 
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useCallback } from 'react';
+
+// ============================================
+// LOCAL STORAGE HOOK
+// ============================================
+
+function useLocalStorage<T>(
+  key: string,
+  initialValue: T,
+  options?: { deserialize?: (data: T) => T }
+): [T, React.Dispatch<React.SetStateAction<T>>] {
+  const [storedValue, setStoredValue] = useState<T>(() => {
+    try {
+      const item = window.localStorage.getItem(key);
+      if (item) {
+        const parsed = JSON.parse(item);
+        return options?.deserialize ? options.deserialize(parsed) : parsed;
+      }
+      return initialValue;
+    } catch {
+      return initialValue;
+    }
+  });
+
+  const setValue: React.Dispatch<React.SetStateAction<T>> = useCallback((value) => {
+    setStoredValue(prev => {
+      const newValue = value instanceof Function ? value(prev) : value;
+      try {
+        window.localStorage.setItem(key, JSON.stringify(newValue));
+      } catch (e) {
+        console.warn('localStorage error:', e);
+      }
+      return newValue;
+    });
+  }, [key]);
+
+  return [storedValue, setValue];
+}
+
+// Helper per ottenere la chiave water del giorno
+const getWaterKey = () => `jefit_water_${new Date().toISOString().split('T')[0]}`;
 
 // ============================================
 // DESIGN TOKENS
@@ -1624,7 +1664,8 @@ const ProfilePage: React.FC<ProfilePageProps> = ({ user, setUser }) => {
 export default function App() {
   const [activeTab, setActiveTab] = useState('home');
 
-  const [user, setUser] = useState<UserProfile>({
+  // Persistenza con localStorage
+  const [user, setUser] = useLocalStorage<UserProfile>('jefit_user', {
     weight: 75,
     height: 178,
     age: 30,
@@ -1633,35 +1674,22 @@ export default function App() {
     goal: 'cut',
   });
 
-  const [meals, setMeals] = useState<Meal[]>([
-    {
-      id: '1',
-      mealType: 'Colazione',
-      time: new Date(new Date().setHours(7, 30)),
-      foods: [
-        calculateFoodNutrients('Yogurt greco')!,
-        calculateFoodNutrients('Muesli')!,
-        calculateFoodNutrients('Banana')!,
-      ],
-      totalKcal: 420,
-      totalProtein: 25,
-      totalCarbs: 65,
-      totalFat: 12,
-    },
-  ]);
+  const [meals, setMeals] = useLocalStorage<Meal[]>('jefit_meals', [], {
+    deserialize: (data) => data.map(m => ({ ...m, time: new Date(m.time) }))
+  });
 
-  const [workouts, setWorkouts] = useState<Workout[]>([
-    {
-      id: '1',
-      workoutType: 'Corsa',
-      time: new Date(new Date().setHours(8, 30)),
-      duration: 32,
-      distance: 5.2,
-      kcalBurned: 380,
-    },
-  ]);
+  const [workouts, setWorkouts] = useLocalStorage<Workout[]>('jefit_workouts', [], {
+    deserialize: (data) => data.map(w => ({ ...w, time: new Date(w.time) }))
+  });
 
-  const [water, setWater] = useState(1.2);
+  const [water, setWater] = useLocalStorage<number>(getWaterKey(), 0);
+
+  // Cleanup dati > 7 giorni
+  useEffect(() => {
+    const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+    setMeals(prev => prev.filter(m => new Date(m.time).getTime() > sevenDaysAgo));
+    setWorkouts(prev => prev.filter(w => new Date(w.time).getTime() > sevenDaysAgo));
+  }, []);
 
   const totalWorkoutKcal = workouts.reduce((sum, w) => sum + w.kcalBurned, 0);
   const dailyTarget = useMemo(() => calculateDailyTarget(user, totalWorkoutKcal), [user, totalWorkoutKcal]);
