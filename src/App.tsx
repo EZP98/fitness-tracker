@@ -1628,7 +1628,7 @@ export default function App() {
         input:focus { outline: none; border-color: ${tokens.colors.primary}; }
       `}</style>
 
-      <div style={{ maxWidth: 430, margin: '0 auto' }}>
+      <div style={{ width: '100%', maxWidth: 430, margin: '0 auto' }}>
         {pages[activeTab]}
       </div>
 
