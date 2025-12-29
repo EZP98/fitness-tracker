@@ -6,44 +6,42 @@
 import React, { useState, useMemo, useEffect, useCallback } from 'react';
 
 // ============================================
-// LOCAL STORAGE HOOK
+// DATABASE SYNC (Cloudflare D1)
 // ============================================
 
-function useLocalStorage<T>(
-  key: string,
-  initialValue: T,
-  options?: { deserialize?: (data: T) => T }
-): [T, React.Dispatch<React.SetStateAction<T>>] {
-  const [storedValue, setStoredValue] = useState<T>(() => {
-    try {
-      const item = window.localStorage.getItem(key);
-      if (item) {
-        const parsed = JSON.parse(item);
-        return options?.deserialize ? options.deserialize(parsed) : parsed;
-      }
-      return initialValue;
-    } catch {
-      return initialValue;
-    }
-  });
+// Device ID (stored locally for identification)
+const getDeviceId = (): string => {
+  let id = localStorage.getItem('jefit_device_id');
+  if (!id) {
+    id = crypto.randomUUID();
+    localStorage.setItem('jefit_device_id', id);
+  }
+  return id;
+};
 
-  const setValue: React.Dispatch<React.SetStateAction<T>> = useCallback((value) => {
-    setStoredValue(prev => {
-      const newValue = value instanceof Function ? value(prev) : value;
-      try {
-        window.localStorage.setItem(key, JSON.stringify(newValue));
-      } catch (e) {
-        console.warn('localStorage error:', e);
-      }
-      return newValue;
+// API helper
+const api = {
+  async sync() {
+    const res = await fetch('/api/sync', {
+      headers: { 'X-Device-ID': getDeviceId() },
     });
-  }, [key]);
+    if (!res.ok) throw new Error('Sync failed');
+    return res.json();
+  },
 
-  return [storedValue, setValue];
-}
-
-// Helper per ottenere la chiave water del giorno
-const getWaterKey = () => `jefit_water_${new Date().toISOString().split('T')[0]}`;
+  async post(action: string, data: any) {
+    const res = await fetch('/api/sync', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Device-ID': getDeviceId(),
+      },
+      body: JSON.stringify({ action, data }),
+    });
+    if (!res.ok) throw new Error('Action failed');
+    return res.json();
+  },
+};
 
 // ============================================
 // DESIGN TOKENS
@@ -1663,9 +1661,10 @@ const ProfilePage: React.FC<ProfilePageProps> = ({ user, setUser }) => {
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('home');
+  const [loading, setLoading] = useState(true);
 
-  // Persistenza con localStorage
-  const [user, setUser] = useLocalStorage<UserProfile>('jefit_user', {
+  // State (synced with Cloudflare D1)
+  const [user, setUserState] = useState<UserProfile>({
     weight: 75,
     height: 178,
     age: 30,
@@ -1673,22 +1672,64 @@ export default function App() {
     activityLevel: 'moderate',
     goal: 'cut',
   });
+  const [meals, setMealsState] = useState<Meal[]>([]);
+  const [workouts, setWorkoutsState] = useState<Workout[]>([]);
+  const [water, setWaterState] = useState(0);
 
-  const [meals, setMeals] = useLocalStorage<Meal[]>('jefit_meals', [], {
-    deserialize: (data) => data.map(m => ({ ...m, time: new Date(m.time) }))
-  });
-
-  const [workouts, setWorkouts] = useLocalStorage<Workout[]>('jefit_workouts', [], {
-    deserialize: (data) => data.map(w => ({ ...w, time: new Date(w.time) }))
-  });
-
-  const [water, setWater] = useLocalStorage<number>(getWaterKey(), 0);
-
-  // Cleanup dati > 7 giorni
+  // Sync on mount
   useEffect(() => {
-    const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
-    setMeals(prev => prev.filter(m => new Date(m.time).getTime() > sevenDaysAgo));
-    setWorkouts(prev => prev.filter(w => new Date(w.time).getTime() > sevenDaysAgo));
+    api.sync().then(data => {
+      setUserState(data.user);
+      setMealsState(data.meals.map((m: any) => ({ ...m, time: new Date(m.time) })));
+      setWorkoutsState(data.workouts.map((w: any) => ({ ...w, time: new Date(w.time) })));
+      setWaterState(data.water);
+    }).catch(console.error).finally(() => setLoading(false));
+  }, []);
+
+  // Wrapper functions that sync with DB
+  const setUser = useCallback((update: UserProfile | ((prev: UserProfile) => UserProfile)) => {
+    setUserState(prev => {
+      const newUser = typeof update === 'function' ? update(prev) : update;
+      api.post('updateUser', newUser).catch(console.error);
+      return newUser;
+    });
+  }, []);
+
+  const setMeals = useCallback((update: Meal[] | ((prev: Meal[]) => Meal[])) => {
+    setMealsState(prev => {
+      const newMeals = typeof update === 'function' ? update(prev) : update;
+      // Detect added/removed meals
+      if (newMeals.length > prev.length) {
+        const added = newMeals.find(m => !prev.some(p => p.id === m.id));
+        if (added) api.post('addMeal', { ...added, time: added.time.toISOString() }).catch(console.error);
+      } else if (newMeals.length < prev.length) {
+        const removed = prev.find(p => !newMeals.some(m => m.id === p.id));
+        if (removed) api.post('deleteMeal', { id: removed.id }).catch(console.error);
+      }
+      return newMeals;
+    });
+  }, []);
+
+  const setWorkouts = useCallback((update: Workout[] | ((prev: Workout[]) => Workout[])) => {
+    setWorkoutsState(prev => {
+      const newWorkouts = typeof update === 'function' ? update(prev) : update;
+      if (newWorkouts.length > prev.length) {
+        const added = newWorkouts.find(w => !prev.some(p => p.id === w.id));
+        if (added) api.post('addWorkout', { ...added, time: added.time.toISOString() }).catch(console.error);
+      } else if (newWorkouts.length < prev.length) {
+        const removed = prev.find(p => !newWorkouts.some(w => w.id === p.id));
+        if (removed) api.post('deleteWorkout', { id: removed.id }).catch(console.error);
+      }
+      return newWorkouts;
+    });
+  }, []);
+
+  const setWater = useCallback((update: number | ((prev: number) => number)) => {
+    setWaterState(prev => {
+      const newWater = typeof update === 'function' ? update(prev) : update;
+      api.post('updateWater', { liters: newWater }).catch(console.error);
+      return newWater;
+    });
   }, []);
 
   const totalWorkoutKcal = workouts.reduce((sum, w) => sum + w.kcalBurned, 0);
@@ -1701,6 +1742,31 @@ export default function App() {
     goals: <GoalsPage user={user} setUser={setUser} dailyTarget={dailyTarget} />,
     profile: <ProfilePage user={user} setUser={setUser} />,
   };
+
+  if (loading) {
+    return (
+      <div style={{
+        minHeight: '100vh',
+        background: tokens.colors.background,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        flexDirection: 'column',
+        gap: 16,
+      }}>
+        <div style={{
+          width: 40,
+          height: 40,
+          border: `3px solid ${tokens.colors.border}`,
+          borderTopColor: tokens.colors.primary,
+          borderRadius: '50%',
+          animation: 'spin 1s linear infinite',
+        }} />
+        <Text muted>Sincronizzazione...</Text>
+        <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+      </div>
+    );
+  }
 
   return (
     <div style={{ minHeight: '100vh', background: tokens.colors.background, fontFamily: tokens.fonts.sans, paddingBottom: 100 }}>
