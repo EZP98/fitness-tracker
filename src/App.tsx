@@ -3,7 +3,7 @@
 // Dynamic TDEE + Goal-based System
 // ============================================
 
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 
 // ============================================
 // DESIGN TOKENS
@@ -575,6 +575,16 @@ const Icons = {
       <circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/>
     </svg>
   ),
+  Sparkles: ({ size = 20, color = 'currentColor' }: { size?: number; color?: string }) => (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"/><path d="M5 3v4"/><path d="M19 17v4"/><path d="M3 5h4"/><path d="M17 19h4"/>
+    </svg>
+  ),
+  RefreshCw: ({ size = 20, color = 'currentColor', style }: { size?: number; color?: string; style?: React.CSSProperties }) => (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={style}>
+      <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/>
+    </svg>
+  ),
 };
 
 // ============================================
@@ -686,7 +696,7 @@ const FloatingNav: React.FC<FloatingNavProps> = ({ activeTab, onTabChange }) => 
                   boxShadow: isActive ? `0 2px 12px rgba(0, 212, 255, 0.3)` : 'none',
                 }}
               >
-                <Icon size={20} color={isActive ? tokens.colors.background : 'rgba(255, 255, 255, 0.9)'} />
+                <Icon size={22} color={isActive ? tokens.colors.background : 'rgba(255, 255, 255, 0.9)'} />
               </button>
             );
           })}
@@ -762,6 +772,42 @@ const HomePage: React.FC<HomePageProps> = ({ user, meals, workouts, water, daily
   const remaining = dailyTarget.targetKcal - totalKcalIn;
   const goal = GOALS[user.goal];
 
+  const [coachAdvice, setCoachAdvice] = useState<string>('');
+  const [coachLoading, setCoachLoading] = useState(false);
+
+  const getCoachAdvice = async () => {
+    setCoachLoading(true);
+    try {
+      const response = await fetch('/api/coach', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userData: {
+            weight: user.weight,
+            height: user.height,
+            age: user.age,
+            goal: GOALS[user.goal].name,
+            todayKcal: totalKcalIn,
+            targetKcal: dailyTarget.targetKcal,
+            todayProtein: totalProtein,
+            targetProtein: dailyTarget.protein,
+            workoutDone: totalWorkoutKcal > 0,
+          },
+        }),
+      });
+      const data = await response.json();
+      setCoachAdvice(data.advice || 'Non ho consigli al momento.');
+    } catch {
+      setCoachAdvice('Connessione al coach non disponibile.');
+    } finally {
+      setCoachLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    getCoachAdvice();
+  }, []);
+
   const timeline = useMemo(() => {
     const items = [
       ...meals.map(m => ({ ...m, type: 'meal' as const, sortTime: m.time })),
@@ -836,24 +882,34 @@ const HomePage: React.FC<HomePageProps> = ({ user, meals, workouts, water, daily
         </Card>
 
         <Card style={{ marginBottom: 16, background: `${tokens.colors.primary}10`, border: `1px solid ${tokens.colors.primary}30` }}>
-          <div style={{ padding: 16, display: 'flex', gap: 12 }}>
-            <Icons.Bolt size={18} color={tokens.colors.primary} />
-            <Text style={{ flex: 1, lineHeight: 1.5 }}>
-              {totalWorkoutKcal > 0
-                ? `Ottimo workout! Hai guadagnato ${dailyTarget.extraWorkoutBonus} kcal extra. `
-                : 'Nessun workout ancora oggi. '
-              }
-              {totalProtein < dailyTarget.protein * 0.5
-                ? `Ti mancano ${dailyTarget.protein - totalProtein}g di proteine - aggiungi pollo o pesce!`
-                : remaining > 500
-                ? `Hai ancora ${remaining} kcal disponibili per oggi.`
-                : remaining < 0
-                ? `Sei in eccesso di ${Math.abs(remaining)} kcal. Considera una camminata.`
-                : 'Ottimo bilanciamento!'
-              }
+          <div style={{ padding: 16 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <Icons.Sparkles size={16} color={tokens.colors.primary} />
+                <Text small style={{ color: tokens.colors.primary, fontWeight: 600 }}>AI Coach</Text>
+              </div>
+              <button
+                onClick={getCoachAdvice}
+                disabled={coachLoading}
+                style={{
+                  background: 'transparent',
+                  border: 'none',
+                  cursor: coachLoading ? 'not-allowed' : 'pointer',
+                  padding: 4,
+                  display: 'flex',
+                  alignItems: 'center',
+                  opacity: coachLoading ? 0.5 : 1,
+                }}
+              >
+                <Icons.RefreshCw size={14} color={tokens.colors.primary} style={{ animation: coachLoading ? 'spin 1s linear infinite' : 'none' }} />
+              </button>
+            </div>
+            <Text style={{ lineHeight: 1.6 }}>
+              {coachLoading ? 'Analizzando i tuoi dati...' : coachAdvice}
             </Text>
           </div>
         </Card>
+        <style>{`@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
 
         <div style={{ marginBottom: 16 }}>
           <H3 style={{ marginBottom: 12 }}>Timeline</H3>
